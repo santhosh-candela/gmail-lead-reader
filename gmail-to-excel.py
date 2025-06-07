@@ -70,9 +70,9 @@ def clean_extract(text, field_name):
             r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
         ],
         'phone': [
-            r'(?:Phone|Mobile|Contact|Phone\s+Number|Contact\s+Number)\s*[:=]\s*([+\d][^\s•<>\n]*)',
-            r'(?:Tel|Telephone)\s*[:=]\s*([+\d][^\s•<>\n]*)',
-            r'(\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})'
+            r'(?:Phone|Mobile|Contact|Phone\s+Number|Contact\s+Number)\s*[:=]\s*(\+?1?\s*\(?[0-9]{3}\)?\s*[0-9]{3}[-.\s]*[0-9]{4})',
+            r'(?:Tel|Telephone)\s*[:=]\s*(\+?1?\s*\(?[0-9]{3}\)?\s*[0-9]{3}[-.\s]*[0-9]{4})',
+            r'(\+1\s*\([0-9]{3}\)\s*[0-9]{3}\s*[0-9]{4})'
         ]
     }
     
@@ -170,18 +170,11 @@ for index, msg in enumerate(messages, 1):
     email = clean_extract(body, 'email') or sender_email
     phone = clean_extract(body, 'phone')
     
-    # Improved phone formatting
-    if phone:
-        # Remove all non-digit and non-plus characters
-        digits = re.sub(r'[^\d+]', '', phone)
-        if digits.startswith('+'):
-            phone = f'={digits}'
-        elif len(digits) == 10:
-            phone = f'=+1{digits}'
-        elif len(digits) == 11 and digits.startswith('1'):
-            phone = f'=+{digits}'
-        else:
-            phone = f'={digits}' if digits else ''
+    # If no phone found, try fallback pattern
+    if not phone:
+        phone_match = re.search(r'(\+1\s*\([0-9]{3}\)\s*[0-9]{3}\s*[0-9]{4})', body)
+        if phone_match:
+            phone = phone_match.group(1)
 
     # Label to status - use 'Qualified' as default like in your sample
     status = 'Qualified'
