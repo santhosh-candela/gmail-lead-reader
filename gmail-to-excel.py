@@ -5,6 +5,7 @@ import re
 import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime
+import pytz
 
 print("🚀 Starting Gmail to Excel Export Script...")
 
@@ -23,6 +24,48 @@ label_map = {label['name']: label['id'] for label in label_results['labels']}
 print("🏷️ Your Gmail labels:")
 for k, v in label_map.items():
     print(f"   • {k}: {v}")
+
+# Step 2.5: Office hours check function
+def is_within_office_hours(date_str):
+    """
+    Check if the message timestamp is today between 7AM-4PM PST, Monday-Friday
+    """
+    try:
+        # Set up PST timezone
+        pst = pytz.timezone('US/Pacific')
+        
+        # Parse the email date
+        if '(' in date_str:
+            date_str = date_str.split('(')[0].strip()
+        
+        # Parse date and convert to PST
+        date_obj = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %z')
+        pst_date = date_obj.astimezone(pst)
+        
+        # Get current date in PST
+        now_pst = datetime.now(pst)
+        today_pst = now_pst.date()
+        
+        # Check if message is from today
+        if pst_date.date() != today_pst:
+            return False, f"Not today (message date: {pst_date.date()}, today: {today_pst})"
+        
+        # Check if it's Monday-Friday (0=Monday, 6=Sunday)
+        if pst_date.weekday() > 4:  # 5=Saturday, 6=Sunday
+            return False, f"Weekend (day: {pst_date.strftime('%A')})"
+        
+        # Check if it's between 7AM-4PM PST
+        hour = pst_date.hour
+        if hour < 7 or hour >= 16:  # 16 = 4PM (exclusive)
+            return False, f"Outside office hours (time: {pst_date.strftime('%I:%M %p PST')})"
+        
+        return True, f"Within office hours ({pst_date.strftime('%A, %I:%M %p PST')})"
+        
+    except Exception as e:
+        return False, f"Error parsing date: {e}"
+
+print(f"\n⏰ Office Hours Filter: Monday-Friday, 7AM-4PM PST")
+print(f"📅 Current PST time: {datetime.now(pytz.timezone('US/Pacific')).strftime('%A, %B %d, %Y %I:%M %p PST')}")
 
 # Step 3: Define custom labels (including 'Qualified' as shown in your sample)
 custom_labels = ['Follow Up', 'Sales Made', 'Callback', 'Quoted', 'Qualified']
@@ -51,10 +94,12 @@ unique_messages = {msg['id']: msg for msg in all_messages}
 messages = list(unique_messages.values())
 print(f"✅ Unique messages after deduplication: {len(messages)}")
 
-# Step 6: Extract details
+# Step 6: Filter by office hours and extract details
 data = []
+filtered_count = 0
+office_hours_count = 0
 
-print("\n📝 Parsing message details...\n")
+print("\n📝 Parsing message details and applying office hours filter...\n")
 
 # Improved extraction function
 def clean_extract(text, field_name):
@@ -94,11 +139,17 @@ for index, msg in enumerate(messages, 1):
     headers = msg_detail['payload']['headers']
     msg_labels = msg_detail.get('labelIds', [])
 
-    # Extract message date and format it
+    # Extract message date and check office hours
     date = ''
+    date_str = ''
+    within_hours = False
+    hours_reason = ''
+    
     for header in headers:
         if header['name'].lower() == 'date':
             date_str = header['value']
+            within_hours, hours_reason = is_within_office_hours(date_str)
+            
             try:
                 # Parse the date string into a datetime object
                 date_obj = datetime.strptime(date_str.split('(')[0].strip(), '%a, %d %b %Y %H:%M:%S %z')
@@ -107,6 +158,18 @@ for index, msg in enumerate(messages, 1):
             except:
                 date = date_str
             break
+    
+    print(f"📅 Date check: {hours_reason}")
+    
+    # Skip if not within office hours
+    if not within_hours:
+        print(f"⏭️  Skipping message (outside office hours)")
+        print("-" * 60)
+        filtered_count += 1
+        continue
+    
+    office_hours_count += 1
+    print(f"✅ Message is within office hours - processing...")
 
     # Extract body (plain or HTML)
     def extract_body(payload):
@@ -193,19 +256,33 @@ for index, msg in enumerate(messages, 1):
 
     data.append([name, email, phone, date, status])
 
-# Step 7: Export to Excel
-print("📤 Exporting to gmail_leads.xlsx...")
-df = pd.DataFrame(data, columns=[
-    "Customer Name", "Email", "Phone", "Created At", "status"
-])
+# Step 7: Export to Excel (only if there's data)
+print(f"\n📊 Summary:")
+print(f"   • Total messages found: {len(messages)}")
+print(f"   • Messages outside office hours: {filtered_count}")
+print(f"   • Messages within office hours: {office_hours_count}")
+print(f"   • Messages to export: {len(data)}")
 
-# Save to Excel - using openpyxl as it's more reliable for formatting
-try:
-    df.to_excel("gmail_leads.xlsx", index=False, engine='openpyxl')
-    print("✅ Export complete. File saved as gmail_leads.xlsx")
-except ImportError:
-    # Fallback if openpyxl not installed
-    df.to_excel("gmail_leads.xlsx", index=False)
-    print("✅ Export complete (using default engine). File saved as gmail_leads.xlsx")
+if len(data) == 0:
+    print("\n❌ No data to export!")
+    print("💡 Reasons this might happen:")
+    print("   • No messages received today during office hours (7AM-4PM PST, Mon-Fri)")
+    print("   • All messages were filtered out due to time/date constraints")
+    print("   • No messages with the specified custom labels")
+    print("\n🚀 Gmail to Excel Export Script completed (no file created).")
+else:
+    print(f"\n📤 Exporting {len(data)} records to gmail_leads.xlsx...")
+    df = pd.DataFrame(data, columns=[
+        "Customer Name", "Email", "Phone", "Created At", "status"
+    ])
 
-print("🚀 Gmail to Excel Export Script completed.")
+    # Save to Excel - using openpyxl as it's more reliable for formatting
+    try:
+        df.to_excel("gmail_leads.xlsx", index=False, engine='openpyxl')
+        print("✅ Export complete. File saved as gmail_leads.xlsx")
+    except ImportError:
+        # Fallback if openpyxl not installed
+        df.to_excel("gmail_leads.xlsx", index=False)
+        print("✅ Export complete (using default engine). File saved as gmail_leads.xlsx")
+
+    print("🚀 Gmail to Excel Export Script completed.")
